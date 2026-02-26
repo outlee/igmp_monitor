@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+influxdb-client[async]==1.45.0
+redis==5.2.1
+numpy==2.2.1
+opencv-python-headless==4.11.0.86
+av==14.3.0
+scipy==1.15.1
+pydantic==2.10.6
+aiofiles==24.1.0
+python-dotenv==1.0.1
+aiosqlite==0.20.0
