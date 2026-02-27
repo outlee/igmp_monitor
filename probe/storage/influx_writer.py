@@ -58,6 +58,10 @@ class InfluxBatchWriter:
             .field("is_frozen", int(metrics.is_frozen))
             .field("is_silent", int(metrics.is_silent))
             .field("is_clipping", int(metrics.is_clipping))
+            .field("is_mosaic", int(metrics.is_mosaic))
+            .field("mosaic_ratio", float(metrics.mosaic_ratio))
+            .field("is_stuttering", int(metrics.is_stuttering))
+            .field("stutter_count", int(metrics.stutter_count))
             .time(datetime.now(timezone.utc), WritePrecision.SECONDS)
         )
         async with self._lock:

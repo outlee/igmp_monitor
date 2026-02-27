@@ -11,6 +11,10 @@ class ChannelStatus(BaseModel):
     is_frozen: bool = False
     is_silent: bool = False
     is_clipping: bool = False
+    is_mosaic: bool = False
+    mosaic_ratio: float = 0.0
+    is_stuttering: bool = False
+    stutter_count: int = 0
     cc_errors_per_sec: float = 0.0
     pcr_jitter_ms: float = 0.0
     audio_rms: float = 0.0

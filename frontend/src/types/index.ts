@@ -9,6 +9,10 @@ export interface ChannelStatus {
   is_frozen: boolean
   is_silent: boolean
   is_clipping: boolean
+  is_mosaic: boolean
+  mosaic_ratio: number
+  is_stuttering: boolean
+  stutter_count: number
   cc_errors_per_sec: number
   pcr_jitter_ms: number
   audio_rms: number
@@ -55,7 +59,7 @@ export interface OverviewStats {
 }
 
 export type WSMessage =
-  | { type: 'channel_status'; channel_id: string; status: ChannelStatusValue; channel_name: string; bitrate_kbps: number; is_black: boolean; is_frozen: boolean; is_silent: boolean; is_clipping: boolean; cc_errors_per_sec: number; pcr_jitter_ms: number; audio_rms: number; video_brightness: number; thumbnail_path: string; ts: number }
+  | { type: 'channel_status'; channel_id: string; status: ChannelStatusValue; channel_name: string; bitrate_kbps: number; is_black: boolean; is_frozen: boolean; is_silent: boolean; is_clipping: boolean; is_mosaic: boolean; mosaic_ratio: number; is_stuttering: boolean; stutter_count: number; cc_errors_per_sec: number; pcr_jitter_ms: number; audio_rms: number; video_brightness: number; thumbnail_path: string; ts: number }
   | { type: 'alert_new'; alert_id: number; channel_id: string; channel_name: string; alert_type: string; severity: string; status: string; ts: number }
   | { type: 'alert_resolved'; alert_id: number; channel_id: string }
   | { type: 'batch_update'; channels: ChannelStatus[]; ts: number }
@@ -69,6 +73,8 @@ export const ALERT_TYPE_LABELS: Record<string, string> = {
   PCR_JITTER: 'PCR抖动',
   BITRATE_ABNORMAL: '码率异常',
   OFFLINE: '离线',
+  MOSAIC: '花屏',
+  AUDIO_STUTTER: '音频卡顿',
 }
 
 export const STATUS_COLORS: Record<ChannelStatusValue, string> = {

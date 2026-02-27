@@ -39,3 +39,15 @@ INFLUX_FLUSH_INTERVAL_MS = 1000
 THUMBNAIL_WIDTH = 320
 THUMBNAIL_HEIGHT = 180
 THUMBNAIL_QUALITY = 75
+
+# 花屏（马赛克）检测
+MOSAIC_CORRUPT_RATIO_THRESHOLD = 0.005   # 连续采样中损坏帧占比阈值（0.5%）
+MOSAIC_LOW_VAR_THRESHOLD = 5.0     # 块方差低于此值视为大块马赛克
+MOSAIC_HIGH_VAR_THRESHOLD = 2000.0  # 块方差高于此值视为噪点花屏
+MOSAIC_BLOCK_SIZE = 16      # 块大小（像素）
+MOSAIC_DURATION_SEC = 3.0    # 持续此秒数才触发告警
+
+# 音频卡顿检测
+STUTTER_PTS_RATIO = 2.0   # 实际间隔/期望间隔 超此倍数视为卡顿
+STUTTER_RATE_THRESHOLD = 2     # 窗口内卡顿事件达此次数触发告警
+STUTTER_WINDOW_SEC = 10.0  # 滑动窗口长度（秒）

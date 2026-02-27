@@ -6,7 +6,7 @@ import struct
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import av
 import numpy as np
@@ -55,6 +55,7 @@ class ChannelMonitor:
         self._av_container: Optional[av.container.InputContainer] = None
         self._ts_fifo = io.BytesIO()
         self._ts_fifo_size = 0
+        self._last_audio_pts: Optional[float] = None
 
     def _create_socket(self) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -79,25 +80,59 @@ class ChannelMonitor:
         except Exception:
             return None
 
-    async def _analyze_video_frame(self, frame_bgr: np.ndarray, ts: float) -> Dict:
+    async def _analyze_video_frame(self, frame_bgr: np.ndarray, ts: float, corrupt_ratio: float = 0.0) -> Dict:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             self.executor,
             self.video_analyzer.analyze_frame,
             frame_bgr,
             ts,
+            corrupt_ratio,
         )
 
-    def _decode_av_frame(self, ts_data: bytes) -> Optional[np.ndarray]:
+    def _decode_av_frame(self, ts_data: bytes) -> Optional[Tuple[np.ndarray, float]]:
         try:
             buf = io.BytesIO(ts_data)
             container = av.open(buf, format="mpegts", options={"analyzeduration": "500000"})
+            total = 0
+            corrupt = 0
+            result_img = None
             for stream in container.streams.video:
                 stream.thread_type = "NONE"
                 for frame in container.decode(stream):
-                    img = frame.to_ndarray(format="bgr24")
+                    total += 1
+                    # 尝试访问 frame.corrupt（部分 PyAV 版本有此属性）
+                    try:
+                        if frame.corrupt:
+                            corrupt += 1
+                    except AttributeError:
+                        pass
+                    if result_img is None:
+                        result_img = frame.to_ndarray(format="bgr24")
+            container.close()
+            corrupt_ratio = (corrupt / total) if total > 0 else 0.0
+            if result_img is not None:
+                return result_img, corrupt_ratio
+        except Exception:
+            pass
+        return None
+
+    def _decode_audio_pts(self, ts_data: bytes) -> Optional[Tuple[np.ndarray, int, float, int]]:
+        """解码音频帧并返回 (samples_int16, sample_rate, pts_sec, samples_count)"""
+        try:
+            buf = io.BytesIO(ts_data)
+            container = av.open(buf, format="mpegts", options={"analyzeduration": "500000"})
+            for stream in container.streams.audio:
+                for frame in container.decode(stream):
+                    samples = frame.to_ndarray()  # shape: (channels, samples)
+                    if samples.ndim > 1:
+                        samples = samples.mean(axis=0)  # 混合为单声道
+                    samples_i16 = (samples * 32767).clip(-32768, 32767).astype(np.int16)
+                    sr = frame.sample_rate
+                    pts_sec = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
+                    samples_count = samples.shape[-1]
                     container.close()
-                    return img
+                    return samples_i16, sr, pts_sec, samples_count
             container.close()
         except Exception:
             pass
@@ -162,11 +197,26 @@ class ChannelMonitor:
                     chunk = bytes(ts_buffer[:65536])
                     ts_buffer.clear()
                     loop = asyncio.get_event_loop()
-                    decoded = await loop.run_in_executor(
+                    decode_result = await loop.run_in_executor(
                         self.executor, self._decode_av_frame, chunk
                     )
-                    if decoded is not None:
-                        frame_result = await self._analyze_video_frame(decoded, now_wall)
+                    if decode_result is not None:
+                        decoded_img, corrupt_ratio = decode_result
+                        frame_result = await self._analyze_video_frame(decoded_img, now_wall, corrupt_ratio)
+
+                    # 同时解码音频进行卡顿检测
+                    audio_decode_result = await loop.run_in_executor(
+                        self.executor, self._decode_audio_pts, chunk
+                    )
+                    if audio_decode_result is not None:
+                        a_samples, a_sr, a_pts, a_count = audio_decode_result
+                        audio_result = await loop.run_in_executor(
+                            self.executor,
+                            lambda: self.audio_analyzer.analyze_chunk(
+                                a_samples, a_sr, now_wall,
+                                pts=a_pts, samples_count=a_count
+                            )
+                        )
                 self._last_frame_time = now
 
             if now - last_metrics_time >= 1.0:
@@ -185,6 +235,10 @@ class ChannelMonitor:
                     is_frozen=frame_result["is_frozen"],
                     is_silent=audio_result["is_silent"],
                     is_clipping=audio_result["is_clipping"],
+                    is_mosaic=frame_result.get("is_mosaic", False),
+                    mosaic_ratio=frame_result.get("mosaic_ratio", 0.0),
+                    is_stuttering=audio_result.get("is_stuttering", False),
+                    stutter_count=audio_result.get("stutter_count", 0),
                     cc_errors_per_sec=cc_per_sec,
                     pcr_jitter_ms=self.ts_parser.pcr_jitter_ms,
                     bitrate_kbps=self.bitrate_calc.bitrate_kbps,
@@ -222,6 +276,8 @@ class ChannelMonitor:
             AlertType.CC_ERROR: "WARNING",
             AlertType.PCR_JITTER: "WARNING",
             AlertType.BITRATE_ABNORMAL: "WARNING",
+            AlertType.MOSAIC: "WARNING",
+            AlertType.AUDIO_STUTTER: "WARNING",
         }
 
         for alert_type in alerts:
@@ -256,6 +312,23 @@ class ChannelMonitor:
                     await self.sqlite_db.resolve_alert(metrics.channel_id, at.value)
                 except Exception:
                     pass
+
+        # 解除已恢复的 WARNING 告警
+        if not metrics.is_mosaic:
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.MOSAIC.value)
+            except Exception:
+                pass
+        if not metrics.is_stuttering:
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.AUDIO_STUTTER.value)
+            except Exception:
+                pass
+        if not metrics.is_clipping:
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.CLIPPING.value)
+            except Exception:
+                pass
 
         self._prev_status = status
 

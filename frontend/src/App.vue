@@ -29,6 +29,7 @@
       <AlertView v-else-if="activeView === 'alerts'" />
       <SimView v-else-if="activeView === 'sim'" />
     </main>
+    <AlertPopup />
   </div>
 </template>
 
@@ -37,6 +38,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import ChannelGrid from './components/ChannelGrid.vue'
 import AlertView from './components/AlertView.vue'
 import SimView from './components/SimView.vue'
+import AlertPopup from './components/AlertPopup.vue'
 import { useAlertsStore } from './stores/alerts'
 
 const activeView = ref<'grid' | 'alerts' | 'sim'>('grid')

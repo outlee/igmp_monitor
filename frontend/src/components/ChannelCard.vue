@@ -24,6 +24,8 @@
       <span v-if="channel.is_frozen" title="冻屏">❄️</span>
       <span v-if="channel.is_silent" title="静音">🔇</span>
       <span v-if="channel.is_clipping" title="爆音">🔊</span>
+      <span v-if="channel.is_mosaic" title="花屏">🌀</span>
+      <span v-if="channel.is_stuttering" title="音频卡顿">🔄</span>
       <span v-if="channel.cc_errors_per_sec > 5" title="CC错误">⚠️</span>
       <span v-if="channel.pcr_jitter_ms > 40" title="PCR抖动">📡</span>
     </div>

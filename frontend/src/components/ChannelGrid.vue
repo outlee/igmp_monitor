@@ -75,6 +75,18 @@
           <span class="metric-label">音频RMS</span>
           <span class="metric-value">{{ detailChannel.audio_rms.toFixed(4) }}</span>
         </div>
+        <div class="metric-item">
+          <span class="metric-label">花屏比例</span>
+          <span class="metric-value" :class="{ warn: detailChannel.is_mosaic }">
+            {{ (detailChannel.mosaic_ratio * 100).toFixed(1) }}%
+          </span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">卡顿次数</span>
+          <span class="metric-value" :class="{ warn: detailChannel.is_stuttering }">
+            {{ detailChannel.stutter_count }}
+          </span>
+        </div>
       </div>
       <MetricsChart :channel-id="detailChannel.channel_id" />
       <ThumbnailModal v-model:visible="thumbVisible" :channel="detailChannel" />
@@ -162,6 +174,10 @@ function handleWsMessage(msg: WSMessage) {
       is_frozen: msg.is_frozen,
       is_silent: msg.is_silent,
       is_clipping: msg.is_clipping,
+      is_mosaic: msg.is_mosaic,
+      mosaic_ratio: msg.mosaic_ratio,
+      is_stuttering: msg.is_stuttering,
+      stutter_count: msg.stutter_count,
       cc_errors_per_sec: msg.cc_errors_per_sec,
       pcr_jitter_ms: msg.pcr_jitter_ms,
       audio_rms: msg.audio_rms,
@@ -360,6 +376,10 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+}
+
+.metric-value.warn {
+  color: #f59e0b;
 }
 
 .metric-item {

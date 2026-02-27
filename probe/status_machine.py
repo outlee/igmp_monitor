@@ -19,6 +19,8 @@ class AlertType(str, Enum):
     PCR_JITTER = "PCR_JITTER"
     BITRATE_ABNORMAL = "BITRATE_ABNORMAL"
     OFFLINE = "OFFLINE"
+    MOSAIC = "MOSAIC"
+    AUDIO_STUTTER = "AUDIO_STUTTER"
 
 
 @dataclass
@@ -30,6 +32,10 @@ class ChannelMetrics:
     is_frozen: bool = False
     is_silent: bool = False
     is_clipping: bool = False
+    is_mosaic: bool = False
+    mosaic_ratio: float = 0.0
+    is_stuttering: bool = False
+    stutter_count: int = 0
     cc_errors_per_sec: float = 0.0
     pcr_jitter_ms: float = 0.0
     bitrate_kbps: float = 0.0
@@ -47,6 +53,8 @@ def evaluate_status(metrics: ChannelMetrics) -> ChannelStatus:
         return ChannelStatus.ALARM
     warning = (
         metrics.is_clipping
+        or metrics.is_mosaic
+        or metrics.is_stuttering
         or metrics.cc_errors_per_sec > 5
         or metrics.pcr_jitter_ms > 40.0
         or (
@@ -72,6 +80,10 @@ def get_active_alerts(metrics: ChannelMetrics) -> List[AlertType]:
         alerts.append(AlertType.SILENT)
     if metrics.is_clipping:
         alerts.append(AlertType.CLIPPING)
+    if metrics.is_mosaic:
+        alerts.append(AlertType.MOSAIC)
+    if metrics.is_stuttering:
+        alerts.append(AlertType.AUDIO_STUTTER)
     if metrics.cc_errors_per_sec > 5:
         alerts.append(AlertType.CC_ERROR)
     if metrics.pcr_jitter_ms > 40.0:
