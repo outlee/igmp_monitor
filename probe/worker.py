@@ -50,6 +50,7 @@ class ChannelMonitor:
         self._cc_window_start = time.monotonic()
         self._cc_window_count = 0
         self._prev_status: Optional[ChannelStatus] = None
+        self._published_alerts: Dict[str, int] = {}  # "channel_id:alert_type" -> alert_id
         self._frame_buffer: List[bytes] = []
         self._audio_buffer: List[np.ndarray] = []
         self._av_container: Optional[av.container.InputContainer] = None
@@ -281,6 +282,7 @@ class ChannelMonitor:
         }
 
         for alert_type in alerts:
+            key = f"{metrics.channel_id}:{alert_type.value}"
             try:
                 alert_id = await self.sqlite_db.upsert_alert(
                     channel_id=metrics.channel_id,
@@ -290,7 +292,8 @@ class ChannelMonitor:
                     message=f"{metrics.channel_name}: {alert_type.value}",
                     thumbnail_path=metrics.thumbnail_path,
                 )
-                if status != self._prev_status:
+                if self._published_alerts.get(key) != alert_id:
+                    self._published_alerts[key] = alert_id
                     await self.redis_writer.publish_alert(
                         {
                             "type": "alert_new",
@@ -306,25 +309,59 @@ class ChannelMonitor:
             except Exception as e:
                 logger.debug("Alert upsert error: %s", e)
 
-        if not metrics.is_offline and self._prev_status == ChannelStatus.ALARM:
-            for at in [AlertType.BLACK_SCREEN, AlertType.FROZEN, AlertType.SILENT, AlertType.OFFLINE]:
-                try:
-                    await self.sqlite_db.resolve_alert(metrics.channel_id, at.value)
-                except Exception:
-                    pass
+        # 解除已恢复的 CRITICAL 告警
+        if not metrics.is_offline:
+            key = f"{metrics.channel_id}:{AlertType.OFFLINE.value}"
+            self._published_alerts.pop(key, None)
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.OFFLINE.value)
+            except Exception:
+                pass
+
+        if not metrics.is_black:
+            key = f"{metrics.channel_id}:{AlertType.BLACK_SCREEN.value}"
+            self._published_alerts.pop(key, None)
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.BLACK_SCREEN.value)
+            except Exception:
+                pass
+
+        if not metrics.is_frozen:
+            key = f"{metrics.channel_id}:{AlertType.FROZEN.value}"
+            self._published_alerts.pop(key, None)
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.FROZEN.value)
+            except Exception:
+                pass
+
+        if not metrics.is_silent:
+            key = f"{metrics.channel_id}:{AlertType.SILENT.value}"
+            self._published_alerts.pop(key, None)
+            try:
+                await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.SILENT.value)
+            except Exception:
+                pass
 
         # 解除已恢复的 WARNING 告警
         if not metrics.is_mosaic:
+            key = f"{metrics.channel_id}:{AlertType.MOSAIC.value}"
+            self._published_alerts.pop(key, None)
             try:
                 await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.MOSAIC.value)
             except Exception:
                 pass
+
         if not metrics.is_stuttering:
+            key = f"{metrics.channel_id}:{AlertType.AUDIO_STUTTER.value}"
+            self._published_alerts.pop(key, None)
             try:
                 await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.AUDIO_STUTTER.value)
             except Exception:
                 pass
+
         if not metrics.is_clipping:
+            key = f"{metrics.channel_id}:{AlertType.CLIPPING.value}"
+            self._published_alerts.pop(key, None)
             try:
                 await self.sqlite_db.resolve_alert(metrics.channel_id, AlertType.CLIPPING.value)
             except Exception:

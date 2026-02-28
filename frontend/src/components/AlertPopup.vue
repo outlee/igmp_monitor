@@ -49,29 +49,32 @@ const alertsStore = useAlertsStore()
 const visiblePopups = ref<PopupItem[]>([])
 const MAX_POPUPS = 5
 const AUTO_DISMISS_MS = 5000
+const shownIds = new Set<number>()
 
 function dismiss(id: number) {
   visiblePopups.value = visiblePopups.value.filter(p => p.id !== id)
 }
 
 watch(
-  () => alertsStore.alerts[0],
-  (newAlert) => {
-    if (!newAlert || newAlert.status !== 'ACTIVE') return
-    // 避免重复
-    if (visiblePopups.value.some(p => p.id === newAlert.id)) return
-    visiblePopups.value.unshift({
-      id: newAlert.id,
-      alert_type: newAlert.alert_type,
-      severity: newAlert.severity,
-      channel_name: newAlert.channel_name,
-      channel_id: newAlert.channel_id,
-    })
-    if (visiblePopups.value.length > MAX_POPUPS) {
-      visiblePopups.value.splice(MAX_POPUPS)
+  () => alertsStore.alerts.length,
+  () => {
+    for (const alert of alertsStore.alerts) {
+      if (alert.status !== 'ACTIVE') continue
+      if (shownIds.has(alert.id)) continue
+      shownIds.add(alert.id)
+      if (visiblePopups.value.length < MAX_POPUPS) {
+        visiblePopups.value.unshift({
+          id: alert.id,
+          alert_type: alert.alert_type,
+          severity: alert.severity,
+          channel_name: alert.channel_name,
+          channel_id: alert.channel_id,
+        })
+        setTimeout(() => dismiss(alert.id), AUTO_DISMISS_MS)
+      }
     }
-    setTimeout(() => dismiss(newAlert.id), AUTO_DISMISS_MS)
-  }
+  },
+  { immediate: true }
 )
 </script>
 
