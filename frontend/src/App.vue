@@ -18,6 +18,10 @@
           <span v-if="alertCount > 0" class="alert-badge">{{ alertCount }}</span>
         </button>
         <button
+          :class="['nav-btn', { active: activeView === 'channels' }]"
+          @click="activeView = 'channels'"
+        >📋 频道管理</button>
+        <button
           :class="['nav-btn', { active: activeView === 'sim' }]"
           @click="activeView = 'sim'"
         >仿真测试</button>
@@ -27,6 +31,7 @@
     <main class="app-main">
       <ChannelGrid v-if="activeView === 'grid'" />
       <AlertView v-else-if="activeView === 'alerts'" />
+      <ChannelManager v-else-if="activeView === 'channels'" />
       <SimView v-else-if="activeView === 'sim'" />
     </main>
     <AlertPopup />
@@ -37,11 +42,12 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import ChannelGrid from './components/ChannelGrid.vue'
 import AlertView from './components/AlertView.vue'
+import ChannelManager from './components/ChannelManager.vue'
 import SimView from './components/SimView.vue'
 import AlertPopup from './components/AlertPopup.vue'
 import { useAlertsStore } from './stores/alerts'
 
-const activeView = ref<'grid' | 'alerts' | 'sim'>('grid')
+const activeView = ref<'grid' | 'alerts' | 'channels' | 'sim'>('grid')
 const alertsStore = useAlertsStore()
 const alertCount = computed(() => alertsStore.activeAlerts.length)
 const currentTime = ref('')

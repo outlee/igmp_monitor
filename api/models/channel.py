@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -47,3 +47,45 @@ class MetricPoint(BaseModel):
     is_frozen: int = 0
     is_silent: int = 0
     status: str = "NORMAL"
+
+
+class ChannelCreate(BaseModel):
+    name: str
+    multicast_ip: str
+    multicast_port: int = 1234
+    group_name: str = "default"
+    sort_order: int = 0
+    enabled: bool = True
+    expected_bitrate_kbps: float = 0.0
+
+
+class ChannelUpdate(BaseModel):
+    name: Optional[str] = None
+    multicast_ip: Optional[str] = None
+    multicast_port: Optional[int] = None
+    group_name: Optional[str] = None
+    sort_order: Optional[int] = None
+    enabled: Optional[bool] = None
+    expected_bitrate_kbps: Optional[float] = None
+
+
+class ChannelManageItem(BaseModel):
+    """用于管理界面展示，包含 disabled 频道"""
+    id: str
+    name: str
+    multicast_ip: str
+    multicast_port: int
+    group_name: str
+    sort_order: int
+    enabled: bool
+    expected_bitrate_kbps: float
+
+
+class BatchImportRequest(BaseModel):
+    csv_text: str
+
+
+class BatchImportResult(BaseModel):
+    success: int
+    failed: int
+    errors: List[str]
