@@ -3,6 +3,8 @@
     <div class="cm-header">
       <h2>📋 频道管理</h2>
       <div class="cm-actions">
+        <button v-if="sortChanged" class="btn-success" @click="saveSortOrder">💾 保存排序</button>
+        <button class="btn-secondary" @click="exportCsv">📤 导出CSV</button>
         <button class="btn-primary" @click="openAdd">+ 新增频道</button>
         <button class="btn-secondary" @click="showImport = true">📥 批量导入CSV</button>
         <button class="btn-default" @click="refresh" :disabled="loading">
@@ -15,18 +17,31 @@
       <table class="cm-table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>频道名称</th>
+            <th style="width:36px"><input type="checkbox" :checked="allSelected" @change="toggleAll" /></th>
+            <th style="width:28px"></th>
+            <th class="sortable-th" @click="sortBy('id')">ID {{ sortIcon('id') }}</th>
+            <th class="sortable-th" @click="sortBy('name')">频道名称 {{ sortIcon('name') }}</th>
             <th>组播地址</th>
-            <th>分组</th>
-            <th>排序</th>
+            <th class="sortable-th" @click="sortBy('group_name')">分组 {{ sortIcon('group_name') }}</th>
+            <th class="sortable-th" @click="sortBy('sort_order')">排序 {{ sortIcon('sort_order') }}</th>
             <th>期望码率</th>
-            <th>状态</th>
+            <th class="sortable-th" @click="sortBy('enabled')">状态 {{ sortIcon('enabled') }}</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="ch in channels" :key="ch.id" :class="{ disabled: !ch.enabled }">
+          <tr
+            v-for="(ch, index) in displayChannels"
+            :key="ch.id"
+            :class="{ disabled: !ch.enabled, 'drag-over': dragOverIndex === index }"
+            draggable="true"
+            @dragstart="onDragStart(index)"
+            @dragover="onDragOver($event, index)"
+            @drop="onDrop(index)"
+            @dragend="onDragEnd"
+          >
+            <td><input type="checkbox" :checked="selectedIds.has(ch.id)" @change="toggleSelect(ch.id)" /></td>
+            <td class="drag-handle">☰</td>
             <td class="channel-id">{{ ch.id }}</td>
             <td>{{ ch.name }}</td>
             <td class="mono">{{ ch.multicast_ip }}:{{ ch.multicast_port }}</td>
@@ -47,7 +62,7 @@
             </td>
           </tr>
           <tr v-if="!channels.length">
-            <td colspan="8" class="empty-cell">
+            <td colspan="10" class="empty-cell">
               {{ loading ? '加载中...' : '暂无频道数据' }}
             </td>
           </tr>
@@ -155,7 +170,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
 import { useChannelsStore } from '@/stores/channels'
 
@@ -190,7 +205,31 @@ const importResult = ref<BatchImportResult | null>(null)
 const deleteTarget = ref<ChannelManageItem | null>(null)
 const deleting = ref(false)
 
+const selectedIds = ref<Set<string>>(new Set())
+const sortKey = ref<string>('')
+const sortDir = ref<'asc' | 'desc'>('asc')
+const sortChanged = ref(false)
+const dragSrcIndex = ref<number>(-1)
+const dragOverIndex = ref<number>(-1)
+
 const channelsStore = useChannelsStore()
+
+const allSelected = computed(() =>
+  channels.value.length > 0 && channels.value.every(ch => selectedIds.value.has(ch.id))
+)
+
+const displayChannels = computed(() => {
+  const list = [...channels.value]
+  if (!sortKey.value) return list
+  list.sort((a, b) => {
+    const av = (a as any)[sortKey.value]
+    const bv = (b as any)[sortKey.value]
+    if (av < bv) return sortDir.value === 'asc' ? -1 : 1
+    if (av > bv) return sortDir.value === 'asc' ? 1 : -1
+    return 0
+  })
+  return list
+})
 
 const form = reactive({
   name: '',
@@ -354,6 +393,91 @@ async function doImport() {
   } finally {
     importing.value = false
   }
+}
+
+function toggleAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(channels.value.map(ch => ch.id))
+  }
+}
+
+function toggleSelect(id: string) {
+  const s = new Set(selectedIds.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  selectedIds.value = s
+}
+
+function sortBy(key: string) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDir.value = 'asc'
+  }
+}
+
+function sortIcon(key: string) {
+  if (sortKey.value !== key) return '↕'
+  return sortDir.value === 'asc' ? '↑' : '↓'
+}
+
+function onDragStart(index: number) {
+  dragSrcIndex.value = index
+}
+
+function onDragOver(event: DragEvent, index: number) {
+  event.preventDefault()
+  dragOverIndex.value = index
+}
+
+function onDrop(index: number) {
+  if (dragSrcIndex.value === -1 || dragSrcIndex.value === index) return
+  const list = [...channels.value]
+  const [moved] = list.splice(dragSrcIndex.value, 1)
+  list.splice(index, 0, moved)
+  list.forEach((ch, i) => { ch.sort_order = (i + 1) * 10 })
+  channels.value = list
+  sortChanged.value = true
+  sortKey.value = ''
+  dragSrcIndex.value = -1
+  dragOverIndex.value = -1
+}
+
+function onDragEnd() {
+  dragSrcIndex.value = -1
+  dragOverIndex.value = -1
+}
+
+async function saveSortOrder() {
+  try {
+    const orders = channels.value.map(ch => ({ id: ch.id, sort_order: ch.sort_order }))
+    await axios.put('/api/v1/channels/batch-sort', { orders })
+    sortChanged.value = false
+    await channelsStore.fetchChannels()
+  } catch (e: any) {
+    alert(e.response?.data?.detail || '保存排序失败')
+  }
+}
+
+function exportCsv() {
+  const list = selectedIds.value.size > 0
+    ? channels.value.filter(ch => selectedIds.value.has(ch.id))
+    : channels.value
+  const header = '频道名,组播IP,端口,分组,期望码率kbps,状态'
+  const rows = list.map(ch =>
+    `${ch.name},${ch.multicast_ip},${ch.multicast_port},${ch.group_name},${ch.expected_bitrate_kbps},${ch.enabled ? '启用' : '禁用'}`
+  )
+  const csv = '\uFEFF' + [header, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'channels.csv'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 onMounted(refresh)
@@ -527,6 +651,20 @@ onMounted(refresh)
 .btn-danger:hover:not(:disabled) { background: #ef4444; }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.btn-success {
+  background: #15803d;
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+.btn-success:hover:not(:disabled) { background: #16a34a; }
+.btn-success:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .btn-sm {
   padding: 4px 10px;
   font-size: 11px;
@@ -553,6 +691,30 @@ onMounted(refresh)
   color: #fca5a5;
 }
 .btn-delete:hover { background: #dc2626; color: #fff; }
+
+/* Drag & Drop */
+.drag-handle {
+  cursor: grab;
+  color: #475569;
+  text-align: center;
+  user-select: none;
+}
+.drag-handle:active { cursor: grabbing; }
+
+.drag-over {
+  outline: 2px dashed #3b82f6;
+  background: #1e3a5f !important;
+}
+
+/* Sortable headers */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+}
+.sortable-th:hover {
+  color: #e2e8f0;
+  background: #263548;
+}
 
 /* Modal */
 .modal-overlay {

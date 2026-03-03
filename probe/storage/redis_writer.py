@@ -10,7 +10,7 @@ from status_machine import ChannelMetrics, ChannelStatus
 
 logger = logging.getLogger(__name__)
 
-STATUS_TTL = 30
+STATUS_TTL = 60
 
 
 class RedisStateWriter:

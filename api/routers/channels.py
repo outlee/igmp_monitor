@@ -13,6 +13,7 @@ from db.sqlite import get_db
 from models.channel import (
     BatchImportRequest,
     BatchImportResult,
+    BatchSortRequest,
     ChannelConfig,
     ChannelCreate,
     ChannelManageItem,
@@ -39,7 +40,7 @@ async def list_channels():
         data = await redis.hgetall(f"channel:{channel_id}:status")
         updated_at = float(data.get("updated_at", 0)) if data else 0
         now = time.time()
-        is_offline = (now - updated_at > 30) if updated_at > 0 else True
+        is_offline = (now - updated_at > 60) if updated_at > 0 else True
 
         status = data.get("status", "OFFLINE") if data and not is_offline else "OFFLINE"
         channels.append(
@@ -80,7 +81,7 @@ async def get_overview():
         if not data:
             continue
         updated_at = float(data.get("updated_at", 0))
-        if now - updated_at > 30:
+        if now - updated_at > 60:
             stats["OFFLINE"] += 1
         else:
             s = data.get("status", "OFFLINE")
@@ -240,7 +241,7 @@ async def get_channel(channel_id: str):
     data = await redis.hgetall(f"channel:{channel_id}:status")
     updated_at = float(data.get("updated_at", 0)) if data else 0
     now = time.time()
-    is_offline = (now - updated_at > 30) if updated_at > 0 else True
+    is_offline = (now - updated_at > 60) if updated_at > 0 else True
     status = data.get("status", "OFFLINE") if data and not is_offline else "OFFLINE"
 
     return ChannelStatus(
@@ -327,6 +328,21 @@ async def create_channel(body: ChannelCreate):
         enabled=body.enabled,
         expected_bitrate_kbps=body.expected_bitrate_kbps,
     )
+
+
+@router.put("/batch-sort")
+async def batch_sort_channels(body: BatchSortRequest):
+    """批量更新频道排序号"""
+    db = await get_db()
+    updated = 0
+    for item in body.orders:
+        await db.execute(
+            "UPDATE channels SET sort_order=? WHERE id=?",
+            (item.sort_order, item.id),
+        )
+        updated += 1
+    await db.commit()
+    return {"updated": updated}
 
 
 @router.put("/{channel_id}", response_model=ChannelManageItem)

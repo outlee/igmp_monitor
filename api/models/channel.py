@@ -89,3 +89,12 @@ class BatchImportResult(BaseModel):
     success: int
     failed: int
     errors: List[str]
+
+
+class SortItem(BaseModel):
+    id: str
+    sort_order: int
+
+
+class BatchSortRequest(BaseModel):
+    orders: List[SortItem]

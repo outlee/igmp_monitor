@@ -62,7 +62,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data/db:/data/db:ro
+      - ./data/db:/data/db
       - ./data/thumbnails:/data/thumbnails:ro
     environment:
       - INFLUXDB_URL=http://influxdb:8086

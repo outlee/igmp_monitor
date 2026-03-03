@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -27,10 +28,13 @@ class SQLiteDB:
     def __init__(self, db_path: str = SQLITE_PATH):
         self.db_path = db_path
         self._db: aiosqlite.Connection | None = None
+        self._write_lock = asyncio.Lock()
 
     async def start(self):
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._create_tables()
 
     async def stop(self):
@@ -38,46 +42,47 @@ class SQLiteDB:
             await self._db.close()
 
     async def _create_tables(self):
-        await self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS channels (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                multicast_ip TEXT NOT NULL,
-                multicast_port INTEGER DEFAULT 1234,
-                group_name TEXT DEFAULT 'default',
-                sort_order INTEGER DEFAULT 0,
-                enabled BOOLEAN DEFAULT 1,
-                sim_video TEXT,
-                expected_bitrate_kbps REAL DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
+        async with self._write_lock:
+            await self._db.executescript("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    multicast_ip TEXT NOT NULL,
+                    multicast_port INTEGER DEFAULT 1234,
+                    group_name TEXT DEFAULT 'default',
+                    sort_order INTEGER DEFAULT 0,
+                    enabled BOOLEAN DEFAULT 1,
+                    sim_video TEXT,
+                    expected_bitrate_kbps REAL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
 
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT NOT NULL,
-                channel_name TEXT,
-                alert_type TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                status TEXT DEFAULT 'ACTIVE',
-                message TEXT,
-                started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                resolved_at DATETIME,
-                ack_at DATETIME,
-                thumbnail_path TEXT,
-                FOREIGN KEY (channel_id) REFERENCES channels(id)
-            );
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id TEXT NOT NULL,
+                    channel_name TEXT,
+                    alert_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    status TEXT DEFAULT 'ACTIVE',
+                    message TEXT,
+                    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at DATETIME,
+                    ack_at DATETIME,
+                    thumbnail_path TEXT,
+                    FOREIGN KEY (channel_id) REFERENCES channels(id)
+                );
 
-            CREATE TABLE IF NOT EXISTS alert_suppression (
-                channel_id TEXT NOT NULL,
-                alert_type TEXT NOT NULL,
-                suppressed_until REAL NOT NULL,
-                PRIMARY KEY (channel_id, alert_type)
-            );
+                CREATE TABLE IF NOT EXISTS alert_suppression (
+                    channel_id TEXT NOT NULL,
+                    alert_type TEXT NOT NULL,
+                    suppressed_until REAL NOT NULL,
+                    PRIMARY KEY (channel_id, alert_type)
+                );
 
-            CREATE INDEX IF NOT EXISTS idx_alerts_channel ON alerts(channel_id, started_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status, started_at DESC);
-        """)
-        await self._db.commit()
+                CREATE INDEX IF NOT EXISTS idx_alerts_channel ON alerts(channel_id, started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status, started_at DESC);
+            """)
+            await self._db.commit()
 
     async def get_enabled_channels(self) -> List[ChannelConfig]:
         async with self._db.execute(
@@ -117,26 +122,29 @@ class SQLiteDB:
             existing = await cur.fetchone()
         if existing:
             return existing["id"]
-        async with self._db.execute(
-            """INSERT INTO alerts (channel_id, channel_name, alert_type, severity, message, thumbnail_path)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (channel_id, channel_name, alert_type, severity, message, thumbnail_path),
-        ) as cur:
-            row_id = cur.lastrowid
-        await self._db.commit()
+        async with self._write_lock:
+            async with self._db.execute(
+                """INSERT INTO alerts (channel_id, channel_name, alert_type, severity, message, thumbnail_path)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (channel_id, channel_name, alert_type, severity, message, thumbnail_path),
+            ) as cur:
+                row_id = cur.lastrowid
+            await self._db.commit()
         return row_id
 
     async def resolve_alert(self, channel_id: str, alert_type: str):
-        await self._db.execute(
-            """UPDATE alerts SET status='RESOLVED', resolved_at=CURRENT_TIMESTAMP
-               WHERE channel_id=? AND alert_type=? AND status='ACTIVE'""",
-            (channel_id, alert_type),
-        )
-        await self._db.commit()
+        async with self._write_lock:
+            await self._db.execute(
+                """UPDATE alerts SET status='RESOLVED', resolved_at=CURRENT_TIMESTAMP
+                   WHERE channel_id=? AND alert_type=? AND status='ACTIVE'""",
+                (channel_id, alert_type),
+            )
+            await self._db.commit()
 
     async def update_channel_name(self, channel_id: str, name: str):
-        await self._db.execute(
-            "UPDATE channels SET name=? WHERE id=?",
-            (name, channel_id),
-        )
-        await self._db.commit()
+        async with self._write_lock:
+            await self._db.execute(
+                "UPDATE channels SET name=? WHERE id=?",
+                (name, channel_id),
+            )
+            await self._db.commit()

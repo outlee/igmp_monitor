@@ -179,7 +179,7 @@ class ChannelMonitor:
             if data is None:
                 metrics = ChannelMetrics(
                     channel_id=self.config.id,
-                    channel_name=self.ts_parser.service_name or self.config.name,
+                    channel_name=self.config.name,
                     is_offline=True,
                     timestamp=now_wall,
                 )
@@ -227,7 +227,7 @@ class ChannelMonitor:
                 self.ts_parser.reset_cc_errors()
                 window_start = now
 
-                channel_name = self.ts_parser.service_name or self.config.name
+                channel_name = self.config.name
                 metrics = ChannelMetrics(
                     channel_id=self.config.id,
                     channel_name=channel_name,
@@ -249,11 +249,6 @@ class ChannelMonitor:
                     thumbnail_path=frame_result.get("thumbnail_path", ""),
                     timestamp=now_wall,
                 )
-
-                if channel_name != self.config.name and channel_name:
-                    asyncio.create_task(
-                        self.sqlite_db.update_channel_name(self.config.id, channel_name)
-                    )
 
                 status = evaluate_status(metrics)
                 await self._handle_status_change(metrics, status)
