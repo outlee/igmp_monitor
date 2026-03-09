@@ -1,0 +1,25 @@
+[Unit]
+Description=IPTV Monitor API Service
+After=network.target influxdb.service redis.service probe.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=iptv
+Group=iptv
+WorkingDirectory=/opt/iptv-monitor/api
+Environment="INFLUXDB_URL=http://localhost:8086"
+Environment="INFLUXDB_TOKEN=iptv-monitor-super-secret-token-2024"
+Environment="INFLUXDB_ORG=iptv"
+Environment="INFLUXDB_BUCKET=metrics"
+Environment="REDIS_URL=redis://localhost:6379"
+Environment="SQLITE_PATH=/data/db/iptv.db"
+Environment="THUMBNAIL_DIR=/data/thumbnails"
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
