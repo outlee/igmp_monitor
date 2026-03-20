@@ -45,7 +45,7 @@ class VideoAnalyzer:
         result["brightness"] = brightness
         result["is_black"] = brightness < BLACK_LUMA_THRESHOLD
 
-        if self.last_gray is not None:
+        if self.last_gray is not None and self.last_gray.shape == gray.shape:
             diff = gray.astype(np.float32) - self.last_gray.astype(np.float32)
             mse = float(np.mean(diff * diff))
             if mse < FREEZE_MSE_THRESHOLD:

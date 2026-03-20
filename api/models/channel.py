@@ -34,6 +34,7 @@ class ChannelConfig(BaseModel):
     sort_order: int = 0
     enabled: bool = True
     expected_bitrate_kbps: float = 0.0
+    service_id: int = 0
 
 
 class MetricPoint(BaseModel):
@@ -57,6 +58,7 @@ class ChannelCreate(BaseModel):
     sort_order: int = 0
     enabled: bool = True
     expected_bitrate_kbps: float = 0.0
+    service_id: int = 0
 
 
 class ChannelUpdate(BaseModel):
@@ -67,6 +69,7 @@ class ChannelUpdate(BaseModel):
     sort_order: Optional[int] = None
     enabled: Optional[bool] = None
     expected_bitrate_kbps: Optional[float] = None
+    service_id: Optional[int] = None
 
 
 class ChannelManageItem(BaseModel):
@@ -79,6 +82,7 @@ class ChannelManageItem(BaseModel):
     sort_order: int
     enabled: bool
     expected_bitrate_kbps: float
+    service_id: int = 0
 
 
 class BatchImportRequest(BaseModel):

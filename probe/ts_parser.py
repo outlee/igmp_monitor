@@ -26,6 +26,8 @@ class StreamInfo:
 @dataclass
 class TSParserState:
     channel_id: str
+    target_service_id: int = 0
+    current_service_id: int = 0
     pat: Dict[int, int] = field(default_factory=dict)
     pmt_pids: Set[int] = field(default_factory=set)
     video_pid: int = -1
@@ -78,8 +80,8 @@ class TSParser:
     SYNC_BYTE = 0x47
     PACKET_SIZE = 188
 
-    def __init__(self, channel_id: str):
-        self.state = TSParserState(channel_id=channel_id)
+    def __init__(self, channel_id: str, service_id: int = 0):
+        self.state = TSParserState(channel_id=channel_id, target_service_id=service_id)
 
     @property
     def service_name(self) -> str:
@@ -241,14 +243,25 @@ class TSParser:
         while i + 3 < end:
             program_num = (data[i] << 8) | data[i + 1]
             pmt_pid = ((data[i + 2] & 0x1F) << 8) | data[i + 3]
+            # 如果指定了目标service_id，只保留该service的PMT
             if program_num != 0:
-                self.state.pat[program_num] = pmt_pid
-                self.state.pmt_pids.add(pmt_pid)
+                if self.state.target_service_id == 0 or program_num == self.state.target_service_id:
+                    self.state.pat[program_num] = pmt_pid
+                    self.state.pmt_pids.add(pmt_pid)
             i += 4
 
     def _parse_pmt(self, data: bytes):
         if len(data) < 12:
             return
+        # PMT前3字节是table_id + section_length，后面是program_number(2字节)
+        program_num = (data[3] << 8) | data[4]
+
+        # 验证是否为目标service_id
+        if self.state.target_service_id != 0 and program_num != self.state.target_service_id:
+            return
+
+        self.state.current_service_id = program_num
+
         section_length = ((data[1] & 0x0F) << 8) | data[2]
         end = 3 + section_length - 4
         pcr_pid = ((data[8] & 0x1F) << 8) | data[9]

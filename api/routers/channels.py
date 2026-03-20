@@ -96,7 +96,7 @@ async def list_channels_manage():
     """返回全部频道含disabled，用于管理界面"""
     db = await get_db()
     async with db.execute(
-        "SELECT id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps "
+        "SELECT id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps, service_id "
         "FROM channels ORDER BY sort_order ASC"
     ) as cur:
         rows = await cur.fetchall()
@@ -110,6 +110,7 @@ async def list_channels_manage():
             sort_order=row["sort_order"] or 0,
             enabled=bool(row["enabled"]),
             expected_bitrate_kbps=float(row["expected_bitrate_kbps"] or 0),
+            service_id=int(row.get("service_id", 0) or 0),
         )
         for row in rows
     ]
@@ -118,7 +119,7 @@ async def list_channels_manage():
 @router.post("/batch-import", response_model=BatchImportResult)
 async def batch_import(body: BatchImportRequest):
     """批量导入CSV频道数据
-    格式: 频道名,组播IP,端口,分组(可选)
+    格式: 频道名,组播IP,端口,分组(可选),service_id(可选)
     """
     errors: List[str] = []
     success = 0
@@ -158,6 +159,7 @@ async def batch_import(body: BatchImportRequest):
         ip_str = parts[1].strip()
         port_str = parts[2].strip()
         group = parts[3].strip() if len(parts) >= 4 else "default"
+        service_id_str = parts[4].strip() if len(parts) >= 5 else "0"
 
         if not name:
             errors.append(f"第{line_num}行: 频道名不能为空")
@@ -189,12 +191,32 @@ async def batch_import(body: BatchImportRequest):
             failed += 1
             continue
 
-        # Check for duplicate ip:port
-        async with db.execute(
-            "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=?",
-            (str(ip), port),
-        ) as cur:
-            dup = await cur.fetchone()
+        # Validate service_id
+        try:
+            service_id = int(service_id_str)
+            if service_id < 0:
+                errors.append(f"第{line_num}行: service_id不能为负数")
+                failed += 1
+                continue
+        except ValueError:
+            errors.append(f"第{line_num}行: service_id格式错误 {service_id_str}")
+            failed += 1
+            continue
+
+        # Check for duplicate ip:port:service_id (only if service_id > 0)
+        if service_id > 0:
+            async with db.execute(
+                "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=? AND service_id=?",
+                (str(ip), port, service_id),
+            ) as cur:
+                dup = await cur.fetchone()
+        else:
+            async with db.execute(
+                "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=?",
+                (str(ip), port),
+            ) as cur:
+                dup = await cur.fetchone()
+
         if dup:
             errors.append(f"第{line_num}行: 组播地址 {ip}:{port} 已被频道 {dup['id']} 占用")
             failed += 1
@@ -203,13 +225,13 @@ async def batch_import(body: BatchImportRequest):
         last_num += 1
         max_sort_order += 1
         channel_id = f"ch{last_num:03d}"
-        rows_to_insert.append((channel_id, name, str(ip), port, group, max_sort_order))
+        rows_to_insert.append((channel_id, name, str(ip), port, group, max_sort_order, service_id))
 
     # Insert valid rows
     for row in rows_to_insert:
         await db.execute(
-            "INSERT INTO channels (id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1, 0)",
+            "INSERT INTO channels (id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps, service_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)",
             (*row,),
         )
         success += 1
@@ -290,12 +312,20 @@ async def create_channel(body: ChannelCreate):
     else:
         new_id = "ch001"
 
-    # 检查重复 ip:port
-    async with db.execute(
-        "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=?",
-        (body.multicast_ip, body.multicast_port),
-    ) as cur:
-        dup = await cur.fetchone()
+    # 检查重复 ip:port:service_id
+    if body.service_id > 0:
+        async with db.execute(
+            "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=? AND service_id=?",
+            (body.multicast_ip, body.multicast_port, body.service_id),
+        ) as cur:
+            dup = await cur.fetchone()
+    else:
+        async with db.execute(
+            "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=?",
+            (body.multicast_ip, body.multicast_port),
+        ) as cur:
+            dup = await cur.fetchone()
+
     if dup:
         raise HTTPException(
             status_code=400,
@@ -303,8 +333,8 @@ async def create_channel(body: ChannelCreate):
         )
 
     await db.execute(
-        "INSERT INTO channels (id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO channels (id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps, service_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             new_id,
             body.name,
@@ -314,6 +344,7 @@ async def create_channel(body: ChannelCreate):
             body.sort_order,
             int(body.enabled),
             body.expected_bitrate_kbps,
+            body.service_id,
         ),
     )
     await db.commit()
@@ -327,6 +358,7 @@ async def create_channel(body: ChannelCreate):
         sort_order=body.sort_order,
         enabled=body.enabled,
         expected_bitrate_kbps=body.expected_bitrate_kbps,
+        service_id=body.service_id,
     )
 
 
@@ -356,16 +388,25 @@ async def update_channel(channel_id: str, body: ChannelUpdate):
     if not row:
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    # If updating ip or port, check for duplicates
-    if body.multicast_ip is not None or body.multicast_port is not None:
+    # If updating ip, port, or service_id, check for duplicates
+    if body.multicast_ip is not None or body.multicast_port is not None or body.service_id is not None:
         new_ip = body.multicast_ip if body.multicast_ip is not None else row["multicast_ip"]
         new_port = body.multicast_port if body.multicast_port is not None else row["multicast_port"]
+        new_service_id = body.service_id if body.service_id is not None else int(row.get("service_id", 0) or 0)
 
-        async with db.execute(
-            "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=? AND id!=?",
-            (new_ip, new_port, channel_id),
-        ) as cur:
-            dup = await cur.fetchone()
+        if new_service_id > 0:
+            async with db.execute(
+                "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=? AND service_id=? AND id!=?",
+                (new_ip, new_port, new_service_id, channel_id),
+            ) as cur:
+                dup = await cur.fetchone()
+        else:
+            async with db.execute(
+                "SELECT id FROM channels WHERE multicast_ip=? AND multicast_port=? AND id!=?",
+                (new_ip, new_port, channel_id),
+            ) as cur:
+                dup = await cur.fetchone()
+
         if dup:
             raise HTTPException(
                 status_code=400,
@@ -376,7 +417,7 @@ async def update_channel(channel_id: str, body: ChannelUpdate):
     fields = []
     params = []
 
-    for field in ["name", "multicast_ip", "multicast_port", "group_name", "sort_order", "enabled", "expected_bitrate_kbps"]:
+    for field in ["name", "multicast_ip", "multicast_port", "group_name", "sort_order", "enabled", "expected_bitrate_kbps", "service_id"]:
         val = getattr(body, field)
         if val is not None:
             fields.append(f"{field}=?")
@@ -394,7 +435,7 @@ async def update_channel(channel_id: str, body: ChannelUpdate):
 
     # Return updated channel
     async with db.execute(
-        "SELECT id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps "
+        "SELECT id, name, multicast_ip, multicast_port, group_name, sort_order, enabled, expected_bitrate_kbps, service_id "
         "FROM channels WHERE id=?",
         (channel_id,),
     ) as cur:
@@ -409,6 +450,7 @@ async def update_channel(channel_id: str, body: ChannelUpdate):
         sort_order=updated["sort_order"] or 0,
         enabled=bool(updated["enabled"]),
         expected_bitrate_kbps=float(updated["expected_bitrate_kbps"] or 0),
+        service_id=int(updated.get("service_id", 0) or 0),
     )
 
 

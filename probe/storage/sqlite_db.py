@@ -22,6 +22,7 @@ class ChannelConfig:
     enabled: bool
     sim_video: Optional[str]
     expected_bitrate_kbps: float = 0.0
+    service_id: int = 0
 
 
 class SQLiteDB:
@@ -54,6 +55,7 @@ class SQLiteDB:
                     enabled BOOLEAN DEFAULT 1,
                     sim_video TEXT,
                     expected_bitrate_kbps REAL DEFAULT 0,
+                    service_id INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -84,6 +86,14 @@ class SQLiteDB:
             """)
             await self._db.commit()
 
+            # 为现有表添加service_id列（如果不存在）
+            try:
+                await self._db.execute("ALTER TABLE channels ADD COLUMN service_id INTEGER DEFAULT 0")
+            except Exception:
+                # 列已存在，忽略错误
+                pass
+            await self._db.commit()
+
     async def get_enabled_channels(self) -> List[ChannelConfig]:
         async with self._db.execute(
             "SELECT * FROM channels WHERE enabled=1 ORDER BY sort_order ASC"
@@ -100,6 +110,7 @@ class SQLiteDB:
                 enabled=bool(row["enabled"]),
                 sim_video=row["sim_video"],
                 expected_bitrate_kbps=float(row["expected_bitrate_kbps"] or 0),
+                service_id=int(row.get("service_id", 0) or 0),
             )
             for row in rows
         ]

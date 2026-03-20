@@ -1,14 +1,11 @@
 import asyncio
-import io
 import logging
 import socket
 import struct
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-import av
 import numpy as np
 
 from analyzers.audio_analyzer import AudioAnalyzer
@@ -42,7 +39,7 @@ class ChannelMonitor:
         self.influx_writer = influx_writer
         self.sqlite_db = sqlite_db
         self.executor = executor
-        self.ts_parser = TSParser(config.id)
+        self.ts_parser = TSParser(config.id, service_id=config.service_id)
         self.bitrate_calc = BitrateCalculator(window_sec=5.0)
         self.video_analyzer = VideoAnalyzer(config.id)
         self.audio_analyzer = AudioAnalyzer()
@@ -51,12 +48,6 @@ class ChannelMonitor:
         self._cc_window_count = 0
         self._prev_status: Optional[ChannelStatus] = None
         self._published_alerts: Dict[str, int] = {}  # "channel_id:alert_type" -> alert_id
-        self._frame_buffer: List[bytes] = []
-        self._audio_buffer: List[np.ndarray] = []
-        self._av_container: Optional[av.container.InputContainer] = None
-        self._ts_fifo = io.BytesIO()
-        self._ts_fifo_size = 0
-        self._last_audio_pts: Optional[float] = None
 
     def _create_socket(self) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -92,49 +83,93 @@ class ChannelMonitor:
         )
 
     def _decode_av_frame(self, ts_data: bytes) -> Optional[Tuple[np.ndarray, float]]:
+        """使用ffmpeg子进程解码视频帧"""
+        import subprocess
+
         try:
-            buf = io.BytesIO(ts_data)
-            container = av.open(buf, format="mpegts", options={"analyzeduration": "500000"})
-            total = 0
-            corrupt = 0
-            result_img = None
-            for stream in container.streams.video:
-                stream.thread_type = "NONE"
-                for frame in container.decode(stream):
-                    total += 1
-                    # 尝试访问 frame.corrupt（部分 PyAV 版本有此属性）
-                    try:
-                        if frame.corrupt:
-                            corrupt += 1
-                    except AttributeError:
-                        pass
-                    if result_img is None:
-                        result_img = frame.to_ndarray(format="bgr24")
-            container.close()
-            corrupt_ratio = (corrupt / total) if total > 0 else 0.0
-            if result_img is not None:
-                return result_img, corrupt_ratio
+            # ffmpeg命令：从pipe读取TS数据，提取第一帧视频，缩放到320px宽，输出BGR24原始数据
+            cmd = [
+                "ffmpeg",
+                "-i", "pipe:0",  # 从stdin读取
+                "-vf", "fps=1,scale=320:-1",  # 提取1fps，缩放到320px宽
+                "-c:v", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-f", "rawvideo",
+                "-an",  # 禁用音频
+                "-v", "error",  # 只输出错误
+                "-t", "1",  # 最多读取1秒
+                "pipe:1",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                # 写入TS数据并关闭stdin
+                proc.stdin.write(ts_data)
+                proc.stdin.close()
+
+                # 读取输出
+                stdout_data, _ = proc.communicate(timeout=10)
+                proc.wait(timeout=10)
+
+                # 计算帧尺寸 (320 x h, 3 bytes per pixel for BGR24)
+                if len(stdout_data) > 0 and len(stdout_data) % (320 * 3) == 0:
+                    height = len(stdout_data) // (320 * 3)
+                    frame = np.frombuffer(stdout_data, dtype=np.uint8).reshape(height, 320, 3)
+                    return frame, 0.0
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
         except Exception:
             pass
         return None
 
     def _decode_audio_pts(self, ts_data: bytes) -> Optional[Tuple[np.ndarray, int, float, int]]:
-        """解码音频帧并返回 (samples_int16, sample_rate, pts_sec, samples_count)"""
+        """使用ffmpeg子进程解码音频帧并返回 (samples_int16, sample_rate, pts_sec, samples_count)"""
+        import subprocess
+
         try:
-            buf = io.BytesIO(ts_data)
-            container = av.open(buf, format="mpegts", options={"analyzeduration": "500000"})
-            for stream in container.streams.audio:
-                for frame in container.decode(stream):
-                    samples = frame.to_ndarray()  # shape: (channels, samples)
-                    if samples.ndim > 1:
-                        samples = samples.mean(axis=0)  # 混合为单声道
-                    samples_i16 = (samples * 32767).clip(-32768, 32767).astype(np.int16)
-                    sr = frame.sample_rate
-                    pts_sec = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
-                    samples_count = samples.shape[-1]
-                    container.close()
-                    return samples_i16, sr, pts_sec, samples_count
-            container.close()
+            # ffmpeg命令：从pipe读取TS数据，提取0.5秒音频，输出PCM S16LE单声道
+            cmd = [
+                "ffmpeg",
+                "-i", "pipe:0",
+                "-vn",  # 禁用视频
+                "-ac", "1",  # 单声道
+                "-ar", "48000",  # 采样率
+                "-f", "s16le",
+                "-t", "0.5",  # 0.5秒
+                "-v", "error",
+                "pipe:1",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                proc.stdin.write(ts_data)
+                proc.stdin.close()
+
+                stdout_data, stderr_data = proc.communicate(timeout=10)
+                proc.wait(timeout=10)
+
+                # 解析stderr获取PTS信息
+                pts_sec = 0.0
+                # ffmpeg可能输出包含PTS信息的行，这里简化处理
+                if len(stdout_data) > 0:
+                    # S16LE = 2 bytes per sample * 48000 samples/sec = 96000 bytes/sec
+                    # 0.5 sec = 48000 samples
+                    samples = np.frombuffer(stdout_data, dtype=np.int16)
+                    return samples, 48000, pts_sec, len(samples)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
         except Exception:
             pass
         return None
