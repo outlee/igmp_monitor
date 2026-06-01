@@ -5,14 +5,17 @@ import cv2
 import numpy as np
 
 from config import (
+    BLACK_CONFIRM_SAMPLES,
     BLACK_LUMA_THRESHOLD,
+    FREEZE_CONFIRM_SAMPLES,
     FREEZE_DURATION_SEC,
     FREEZE_MSE_THRESHOLD,
+    MOSAIC_BLOCK_SIZE,
+    MOSAIC_CONFIRM_SAMPLES,
     MOSAIC_CORRUPT_RATIO_THRESHOLD,
     MOSAIC_DURATION_SEC,
     MOSAIC_HIGH_VAR_THRESHOLD,
     MOSAIC_LOW_VAR_THRESHOLD,
-    MOSAIC_BLOCK_SIZE,
     THUMBNAIL_DIR,
     THUMBNAIL_HEIGHT,
     THUMBNAIL_QUALITY,
@@ -28,6 +31,12 @@ class VideoAnalyzer:
         self.freeze_start: Optional[float] = None
         # 花屏检测状态
         self._mosaic_start: Optional[float] = None
+
+        # 连续确认计数器（减少瞬时异常导致的误报）
+        self._black_count = 0
+        self._freeze_count = 0
+        self._mosaic_count = 0
+
         os.makedirs(thumbnail_dir, exist_ok=True)
 
     def analyze_frame(self, frame_bgr: np.ndarray, timestamp: float, corrupt_ratio: float = 0.0) -> Dict:
@@ -43,7 +52,11 @@ class VideoAnalyzer:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         brightness = float(np.mean(gray))
         result["brightness"] = brightness
-        result["is_black"] = brightness < BLACK_LUMA_THRESHOLD
+
+        # 黑屏：需要连续多个采样才确认（减少单帧噪声误报）
+        is_black_now = brightness < BLACK_LUMA_THRESHOLD
+        self._black_count = self._black_count + 1 if is_black_now else 0
+        result["is_black"] = self._black_count >= BLACK_CONFIRM_SAMPLES
 
         if self.last_gray is not None and self.last_gray.shape == gray.shape:
             diff = gray.astype(np.float32) - self.last_gray.astype(np.float32)
@@ -52,11 +65,15 @@ class VideoAnalyzer:
                 if self.freeze_start is None:
                     self.freeze_start = timestamp
                 elif timestamp - self.freeze_start > FREEZE_DURATION_SEC:
-                    result["is_frozen"] = True
+                    self._freeze_count += 1
             else:
                 self.freeze_start = None
+                self._freeze_count = 0
         else:
             self.freeze_start = None
+            self._freeze_count = 0
+
+        result["is_frozen"] = self._freeze_count >= FREEZE_CONFIRM_SAMPLES
 
         self.last_gray = gray
 
@@ -88,14 +105,18 @@ class VideoAnalyzer:
         else:
             signal_b = False
 
-        # 任一信号持续超时 → 花屏
+        # 任一信号持续超时 → 花屏（增加连续确认）
         if signal_a or signal_b:
             if self._mosaic_start is None:
                 self._mosaic_start = timestamp
             elif timestamp - self._mosaic_start > MOSAIC_DURATION_SEC:
-                is_mosaic = True
+                self._mosaic_count += 1
         else:
             self._mosaic_start = None
+            self._mosaic_count = 0
+
+        if self._mosaic_count >= MOSAIC_CONFIRM_SAMPLES:
+            is_mosaic = True
 
         result["is_mosaic"] = is_mosaic
         result["mosaic_ratio"] = mosaic_ratio

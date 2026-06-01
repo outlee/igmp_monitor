@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 
 FAULT_TYPES = ["BLACK_SCREEN", "FROZEN", "SILENT", "PACKET_LOSS", "BITRATE_DROP"]
 
+# 复用 Redis 连接（避免每次请求新建连接）
+_redis_client: Optional[aioredis.Redis] = None
+
+
+async def get_redis() -> aioredis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+    return _redis_client
+
 
 class FaultRequest(BaseModel):
     channel_id: str
@@ -28,33 +38,27 @@ class FaultClearRequest(BaseModel):
 async def trigger_fault(req: FaultRequest):
     if req.fault_type not in FAULT_TYPES:
         raise HTTPException(status_code=400, detail=f"Unknown fault type: {req.fault_type}")
-    r = aioredis.from_url(REDIS_URL, decode_responses=True)
-    try:
-        cmd = json.dumps({
-            "action": "trigger_fault",
-            "channel_id": req.channel_id,
-            "fault_type": req.fault_type,
-            "duration_sec": req.duration_sec,
-        })
-        await r.publish("sim_command", cmd)
-        logger.info("Published sim fault command: %s", cmd)
-        return {"status": "ok", "channel_id": req.channel_id, "fault_type": req.fault_type}
-    finally:
-        await r.aclose()
+    r = await get_redis()
+    cmd = json.dumps({
+        "action": "trigger_fault",
+        "channel_id": req.channel_id,
+        "fault_type": req.fault_type,
+        "duration_sec": req.duration_sec,
+    })
+    await r.publish("sim_command", cmd)
+    logger.info("Published sim fault command: %s", cmd)
+    return {"status": "ok", "channel_id": req.channel_id, "fault_type": req.fault_type}
 
 
 @router.post("/clear")
 async def clear_fault(req: FaultClearRequest):
-    r = aioredis.from_url(REDIS_URL, decode_responses=True)
-    try:
-        cmd = json.dumps({
-            "action": "clear_fault",
-            "channel_id": req.channel_id,
-        })
-        await r.publish("sim_command", cmd)
-        return {"status": "ok", "channel_id": req.channel_id}
-    finally:
-        await r.aclose()
+    r = await get_redis()
+    cmd = json.dumps({
+        "action": "clear_fault",
+        "channel_id": req.channel_id,
+    })
+    await r.publish("sim_command", cmd)
+    return {"status": "ok", "channel_id": req.channel_id}
 
 
 @router.get("/faults")

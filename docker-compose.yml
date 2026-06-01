@@ -50,6 +50,8 @@ services:
       - SIM_VIDEO_DIR=/data/videos
       - WORKER_COUNT=10
       - CHANNELS_PER_WORKER=30
+      # 可选：指定组播接收网卡 IP（解决多网卡/WSL/特定IPTV网络问题）
+      # - MULTICAST_IFACE_IP=10.178.41.1
     depends_on:
       influxdb:
         condition: service_healthy

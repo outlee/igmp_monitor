@@ -1,5 +1,6 @@
 import struct
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -40,6 +41,7 @@ class TSParserState:
     last_pcr: Optional[int] = None
     last_pcr_time: Optional[float] = None
     pcr_jitter_ms: float = 0.0
+    _jitter_window: deque[float] = field(default_factory=lambda: deque(maxlen=5), repr=False)
     section_buffers: Dict[int, bytes] = field(default_factory=dict)
     last_video_frame: Optional[bytes] = None
 
@@ -333,8 +335,14 @@ class TSParser:
                 pcr_diff += (1 << 33) * 300
             expected_diff_27mhz = (now - self.state.last_pcr_time) * 27_000_000
             if expected_diff_27mhz > 0:
-                jitter_ticks = abs(pcr_diff - expected_diff_27mhz)
-                self.state.pcr_jitter_ms = jitter_ticks / 27_000.0
+                raw_jitter = abs(pcr_diff - expected_diff_27mhz) / 27_000.0
+                self.state._jitter_window.append(raw_jitter)
+                if len(self.state._jitter_window) >= 3:
+                    # 中值滤波，减少单次网络抖动导致的 PCR 误报
+                    sorted_j = sorted(self.state._jitter_window)
+                    self.state.pcr_jitter_ms = sorted_j[len(sorted_j) // 2]
+                else:
+                    self.state.pcr_jitter_ms = raw_jitter
         self.state.last_pcr = pcr
         self.state.last_pcr_time = now
 

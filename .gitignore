@@ -17,11 +17,23 @@ frontend/.vite/
 
 # Data
 data/db/*.db
+data/db/*.db-*
 data/thumbnails/*.jpg
 data/thumbnails/*.png
+data/videos/*
+!data/videos/README.md
+
+# Logs
+*.log
+logs/
 
 # Docker
 .docker/
+
+# Test / dev scripts (environment specific)
+test_*.py
+*test*.py
+channels.csv
 
 # Editor
 .vscode/

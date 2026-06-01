@@ -5,6 +5,7 @@ import numpy as np
 from config import (
     CLIP_RATIO_THRESHOLD,
     CLIP_THRESHOLD,
+    SILENCE_CONFIRM_SAMPLES,
     SILENCE_DURATION_SEC,
     SILENCE_RMS_THRESHOLD,
     STUTTER_PTS_RATIO,
@@ -19,6 +20,10 @@ class AudioAnalyzer:
         # 卡顿检测状态
         self._last_pts: Optional[float] = None  # 上一帧 PTS（秒）
         self._stutter_events: List[float] = []  # 卡顿事件时间戳（单调时钟秒）
+
+        # 连续确认计数（减少误报）
+        self._silence_count = 0
+        self._clip_count = 0
 
     def analyze_chunk(
         self,
@@ -43,9 +48,13 @@ class AudioAnalyzer:
             if self.silence_start is None:
                 self.silence_start = timestamp
             elif timestamp - self.silence_start > SILENCE_DURATION_SEC:
-                is_silent = True
+                self._silence_count += 1
         else:
             self.silence_start = None
+            self._silence_count = 0
+
+        if self._silence_count >= SILENCE_CONFIRM_SAMPLES:
+            is_silent = True
 
         # --- 音频卡顿检测 ---
         is_stuttering = False
@@ -74,10 +83,14 @@ class AudioAnalyzer:
         if pts is not None:
             self._last_pts = pts
 
+        # 削波也增加连续确认
+        is_clipping = clip_ratio > CLIP_RATIO_THRESHOLD
+        self._clip_count = self._clip_count + 1 if is_clipping else 0
+
         return {
             "rms": rms,
             "is_silent": is_silent,
-            "is_clipping": clip_ratio > CLIP_RATIO_THRESHOLD,
+            "is_clipping": self._clip_count >= 2,  # 简单用 2 次连续
             "clip_ratio": clip_ratio,
             "is_stuttering": is_stuttering,
             "stutter_count": stutter_count,

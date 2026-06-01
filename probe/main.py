@@ -65,7 +65,18 @@ async def main():
             await asyncio.sleep(30)
             for i, p in enumerate(processes):
                 if not p.is_alive():
-                    logger.warning("Worker %d died, restarting...", i)
+                    logger.warning("Worker %d died, restarting with fresh channel list...", i)
+                    # 重新加载 channels，避免使用陈旧列表
+                    try:
+                        fresh_channels = await init_db_and_load_channels()
+                        if fresh_channels:
+                            new_chunks = [fresh_channels[j:j + CHANNELS_PER_WORKER]
+                                          for j in range(0, len(fresh_channels), CHANNELS_PER_WORKER)]
+                            if i < len(new_chunks):
+                                chunks[i] = new_chunks[i]
+                    except Exception as e:
+                        logger.error("Failed to reload channels on worker restart: %s", e)
+
                     new_p = multiprocessing.Process(
                         target=run_worker,
                         args=(i, chunks[i]),
